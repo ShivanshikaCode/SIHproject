@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <title>Rooftop Area Calculator with Search and Live Location</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+
+  <!-- Leaflet Draw CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-draw/dist/leaflet.draw.css" />
+
+  <style>
+    body,
+    html {
+      height: 100%;
+      margin: 0;
+      font-family: Arial, sans-serif;
+      display: flex;
+      flex-direction: column;
+    }
+
+    #header {
+      background-color: #004085;
+      color: white;
+      padding: 10px 20px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      position: relative;
+    }
+
+    #searchInput {
+      flex-grow: 1;
+      padding: 8px 12px;
+      border-radius: 6px;
+      border: none;
+      font-size: 16px;
+    }
+
+    #locateBtn {
+      background: white;
+      color: #004085;
+      border: none;
+      padding: 10px 18px;
+      font-size: 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+      transition: background-color 0.3s;
+    }
+
+    #locateBtn:hover {
+      background-color: #e0e0e0;
+    }
+
+    #map {
+      flex-grow: 1;
+    }
+
+    #areaOutput {
+      padding: 12px 20px;
+      font-weight: bold;
+      background: #f0f4ff;
+      color: #0645ad;
+      min-height: 48px;
+    }
+
+    #suggestions {
+      position: absolute;
+      top: 44px;
+      left: 20px;
+      right: 150px;
+      background: white;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      max-height: 200px;
+      overflow-y: auto;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+      z-index: 1000;
+      color: black;
+      font-size: 16px;
+    }
+
+    .suggestion-item {
+      padding: 8px 12px;
+      cursor: pointer;
+    }
+
+    .suggestion-item:hover {
+      background-color: #eee;
+    }
+
+    #useArea {
+      visibility: hidden;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="header">
+    <input type="text" id="searchInput" placeholder="Search location e.g. New Delhi" autocomplete="off" />
+    <button id="locateBtn">My Live Location</button>
+  </div>
+  <div id="suggestions" style="display:none;"></div>
+  <div id="map"></div>
+  <div id="areaOutput">Draw your rooftop polygon after locating or searching.
+  </div>
+  <button id="useArea">Use this area</button>
+
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet-draw/dist/leaflet.draw.js"></script>
+  <script src="https://unpkg.com/@turf/turf/turf.min.js"></script>
+
+  <script>
+    let area = 0;
+    const map = L.map('map').setView([20.5937, 78.9629], 5);
+
+    // Esri satellite tiles
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      attribution: 'Tiles © Esri',
+      maxZoom: 19,
+    }).addTo(map);
+    const areaOutput = document.getElementById('areaOutput');
+    const locateBtn = document.getElementById('locateBtn');
+    const searchInput = document.getElementById('searchInput');
+    const suggestionsDiv = document.getElementById('suggestions');
+
+    // Layer group for polygons
+    const drawnItems = new L.FeatureGroup();
+    map.addLayer(drawnItems);
+
+    // Leaflet Draw controls
+    const drawControl = new L.Control.Draw({
+      draw: {
+        polygon: true,
+        polyline: false,
+        rectangle: false,
+        circle: false,
+        marker: false,
+        circlemarker: false
+      },
+      edit: {
+        featureGroup: drawnItems,
+        remove: true
+      }
+    });
+    map.addControl(drawControl);
+
+    // Calculate area on polygon draw end
+    map.on('draw:created', function (e) {
+      drawnItems.clearLayers();
+      drawnItems.addLayer(e.layer);
+      const geojson = e.layer.toGeoJSON();
+      area = turf.area(geojson);
+      areaOutput.textContent = `Rooftop Area: ${area.toFixed(2)} m²`;
+      document.getElementById('useArea').style.visibility = 'visible';
+    });
+    map.on('draw:edited', function (e) {
+      e.layers.eachLayer(function (layer) {
+        const geojson = layer.toGeoJSON();
+        area = turf.area(geojson);
+        areaOutput.textContent = `Rooftop Area: ${area.toFixed(2)} m²`;
+      });
+    });
+    map.on('draw:deleted', function (e) {
+      // Check if any polygons remain
+      if (drawnItems.getLayers().length === 0) {
+        areaOutput.textContent = "Please draw a polygon to calculate the rooftop area.";
+        document.getElementById('useArea').style.visibility = 'hidden';
+      }
+    });
+
+    // My Live Location button logic
+    locateBtn.addEventListener('click', () => {
+      areaOutput.textContent = "Locating your position...";
+      drawnItems.clearLayers();
+      map.locate({ setView: true, maxZoom: 19, minZoom: 19 });
+    });
+
+    map.on('locationfound', e => {
+      areaOutput.innerHTML = "Location found! You can now draw your rooftop.";
+    });
+
+    map.on('locationerror', e => {
+      areaOutput.textContent = `Failed to get location: ${e.message}. Please search or pan the map manually.`;
+    });
+
+    // Photon API based Search Autocomplete
+    let debounceTimer;
+    searchInput.addEventListener('input', () => {
+      const query = searchInput.value.trim();
+      if (debounceTimer) clearTimeout(debounceTimer);
+      if (query.length < 3) {
+        clearSuggestions();
+        return;
+      }
+      debounceTimer = setTimeout(() => {
+        fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=5`)
+          .then(res => res.json())
+          .then(data => {
+            if (data.features && data.features.length) {
+              showSuggestions(data.features);
+            } else {
+              clearSuggestions();
+            }
+          })
+          .catch(() => {
+            clearSuggestions();
+          });
+      }, 300);
+    });
+
+    function showSuggestions(features) {
+      suggestionsDiv.innerHTML = '';
+      if (!features.length) {
+        clearSuggestions();
+        return;
+      }
+      features.forEach(feature => {
+        const div = document.createElement('div');
+        div.className = 'suggestion-item';
+        div.textContent =
+          feature.properties.name +
+          (feature.properties.city ? ', ' + feature.properties.city : '') +
+          (feature.properties.country ? ', ' + feature.properties.country : '');
+        div.onclick = () => {
+          searchInput.value = div.textContent;
+          const [lon, lat] = feature.geometry.coordinates;
+          map.setView([lat, lon], 18);
+          if (!drawnItems) return;
+          drawnItems.clearLayers();
+          clearSuggestions();
+          areaOutput.textContent = "Select rooftop polygon after moving map.";
+        };
+        suggestionsDiv.appendChild(div);
+      });
+      suggestionsDiv.style.display = 'block';
+    }
+
+    function clearSuggestions() {
+      suggestionsDiv.innerHTML = '';
+      suggestionsDiv.style.display = 'none';
+    }
+    document.getElementById('useArea').addEventListener('click', () => {
+      if (drawnItems.getLayers().length === 0) {
+        alert('Please draw or edit a polygon first.');
+        return;
+      }
+
+      // Assuming only one polygon present (as your UI clears before drawing)
+      const polygonLayer = drawnItems.getLayers()[0];
+      const geojson = polygonLayer.toGeoJSON();
+      const area = turf.area(geojson);
+
+      // Display or use the updated area
+      sessionStorage.setItem('savedRooftopArea', area);
+      window.location.href = 'x.html';
+      // Or update the text areaOutput.textContent = `Saved Rooftop Area: ${area.toFixed(2)} m²`;
+    });
+
+  </script>
+</body>
+
+</html>
